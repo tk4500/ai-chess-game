@@ -81,6 +81,8 @@ def ai_make_move(request: MoveRequest):
             actual_move = ai_move["move"]
             if "reasoning" in ai_move:
                 actual_move["reasoning"] = ai_move["reasoning"]
+            if "plan" in ai_move:
+                actual_move["plan"] = ai_move["plan"]
             ai_move = actual_move
             
         if not ai_move or "origin" not in ai_move or "destination" not in ai_move:

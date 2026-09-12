@@ -8,33 +8,21 @@ const html = htm.bind(React.createElement);
 
 const STORAGE_KEY = "ai_chess_games";
 
-// Utility to generate a unique ID
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
 function App() {
   const [games, setGames] = useState({});
   const [activeGameId, setActiveGameId] = useState(null);
-  
-  const [game, setGame] = useState(() => new Chess());
   const [models, setModels] = useState([]);
-  const [whitePlayer, setWhitePlayer] = useState("Human");
-  const [blackPlayer, setBlackPlayer] = useState("Human");
-  const [historyItems, setHistoryItems] = useState([]);
-  const [fenHistory, setFenHistory] = useState([new Chess().fen()]);
-  const [status, setStatus] = useState("Game started.");
-  
-  const [isThinking, setIsThinking] = useState(false);
-  const [isPaused, setIsPaused] = useState(true);
   const [isLoaded, setIsLoaded] = useState(false);
   
-  // Stockfish State
-  const [evalScore, setEvalScore] = useState(0); // centipawns or mate string
+  // Stockfish State (Only for active game UI)
+  const [evalScore, setEvalScore] = useState(0); 
   const [bestMove, setBestMove] = useState("-");
   const workerRef = useRef(null);
 
-  // 1. Initialize Application & Stockfish
+  // Initialize
   useEffect(() => {
-    // Fetch available models
     fetch("/api/models")
       .then((res) => res.json())
       .then((data) => {
@@ -42,7 +30,6 @@ function App() {
       })
       .catch((err) => console.error("Failed to load models", err));
 
-    // Initialize Stockfish Web Worker via Blob to avoid CORS
     const stockfishCode = `importScripts("https://unpkg.com/stockfish.js@10.0.2/stockfish.js");`;
     const blob = new Blob([stockfishCode], { type: 'application/javascript' });
     const worker = new Worker(URL.createObjectURL(blob));
@@ -51,32 +38,19 @@ function App() {
         const line = e.data;
         if (typeof line !== 'string') return;
         
-        // Parse evaluation
         if (line.startsWith("info depth") && line.includes("score")) {
             const scoreMatch = line.match(/score (cp|mate) (-?\d+)/);
             if (scoreMatch) {
-                const type = scoreMatch[1];
-                let value = parseInt(scoreMatch[2], 10);
-                
-                // If it's black's turn, stockfish returns score from black's perspective, so we negate it
-                // Wait, stockfish returns score from the perspective of the side to move
-                // Let's rely on the FEN to know whose turn it was when we sent it
-                // But it's easier to just assume stockfish outputs for side to move.
-                // We will handle negation when setting if needed. Actually standard UCI is from engine's perspective.
-                // We'll just store it raw and adjust in render.
-                setEvalScore({ type, value });
+                setEvalScore({ type: scoreMatch[1], value: parseInt(scoreMatch[2], 10) });
             }
         }
-        // Parse bestmove
         if (line.startsWith("bestmove")) {
-            const move = line.split(" ")[1];
-            setBestMove(move);
+            setBestMove(line.split(" ")[1]);
         }
     };
     workerRef.current = worker;
     worker.postMessage("uci");
     
-    // Load from LocalStorage
     const saved = localStorage.getItem(STORAGE_KEY);
     let loadedGames = {};
     let initialActiveId = null;
@@ -93,7 +67,6 @@ function App() {
       }
     }
     
-    // If no games, create default
     if (Object.keys(loadedGames).length === 0) {
         const id = generateId();
         initialActiveId = id;
@@ -102,12 +75,22 @@ function App() {
             whitePlayer: "Human",
             blackPlayer: "Human",
             historyItems: [],
-            fenHistory: [new Chess().fen()]
+            fenHistory: [new Chess().fen()],
+            isPaused: true,
+            status: "Game started.",
+            isThinking: false,
+            plan: null
         };
+    } else {
+        // Ensure legacy games have the new fields
+        Object.keys(loadedGames).forEach(id => {
+            if (loadedGames[id].isPaused === undefined) loadedGames[id].isPaused = true;
+            if (loadedGames[id].status === undefined) loadedGames[id].status = "Loaded";
+            loadedGames[id].isThinking = false;
+        });
     }
     
     setGames(loadedGames);
-    loadGameIntoState(loadedGames[initialActiveId]);
     setActiveGameId(initialActiveId);
     setIsLoaded(true);
     
@@ -116,51 +99,24 @@ function App() {
     };
   }, []);
 
-  const loadGameIntoState = (g) => {
-      setWhitePlayer(g.whitePlayer);
-      setBlackPlayer(g.blackPlayer);
-      setHistoryItems(g.historyItems || []);
-      setFenHistory(g.fenHistory || [new Chess().fen()]);
-      setGame(new Chess(g.fenHistory[g.fenHistory.length - 1]));
-      setIsPaused(true);
-      setBestMove("-");
-      setEvalScore({ type: 'cp', value: 0 });
-  };
+  const activeGame = games[activeGameId] || null;
+  const activeChess = activeGame ? new Chess(activeGame.fenHistory[activeGame.fenHistory.length - 1]) : null;
 
-  // Save current game state back to `games` object and localStorage whenever it changes
+  // Stockfish analysis for active game
   useEffect(() => {
-    if (!isLoaded || !activeGameId) return;
-    
-    setGames((prev) => {
-        const updatedGames = { ...prev };
-        if (updatedGames[activeGameId]) {
-            updatedGames[activeGameId] = {
-                ...updatedGames[activeGameId],
-                whitePlayer,
-                blackPlayer,
-                historyItems,
-                fenHistory
-            };
-        }
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeGameId, games: updatedGames }));
-        return updatedGames;
-    });
-    
-    checkGameOver();
-    
-    // Trigger Stockfish Analysis
-    if (workerRef.current && !game.isGameOver()) {
+    if (workerRef.current && activeChess && !activeChess.isGameOver()) {
         workerRef.current.postMessage("stop");
-        workerRef.current.postMessage(`position fen ${game.fen()}`);
+        workerRef.current.postMessage(`position fen ${activeChess.fen()}`);
         workerRef.current.postMessage("go depth 12");
     }
-  }, [whitePlayer, blackPlayer, historyItems, fenHistory, isLoaded]);
+  }, [activeGame?.fenHistory]);
 
-  const switchGame = (id) => {
-      if (games[id]) {
-          setActiveGameId(id);
-          loadGameIntoState(games[id]);
-      }
+  const updateGame = (id, updates) => {
+      setGames(prev => {
+          const newGames = { ...prev, [id]: { ...prev[id], ...updates } };
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeGameId: prev.activeGameId, games: newGames }));
+          return newGames;
+      });
   };
 
   const createNewGame = () => {
@@ -173,12 +129,19 @@ function App() {
           whitePlayer: "Human",
           blackPlayer: "Human",
           historyItems: [],
-          fenHistory: [new Chess().fen()]
+          fenHistory: [new Chess().fen()],
+          isPaused: true,
+          status: "Game started.",
+          isThinking: false,
+          plan: null
       };
       
-      setGames(prev => ({ ...prev, [id]: newGame }));
+      setGames(prev => {
+          const newGames = { ...prev, [id]: newGame };
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeGameId: id, games: newGames }));
+          return newGames;
+      });
       setActiveGameId(id);
-      loadGameIntoState(newGame);
   };
 
   const deleteGame = (id) => {
@@ -187,175 +150,234 @@ function App() {
           const newGames = { ...prev };
           delete newGames[id];
           
+          let nextActive = activeGameId;
           if (Object.keys(newGames).length === 0) {
-              // Create an empty one if all are deleted
-              setTimeout(createNewGame, 0); 
+              setTimeout(createNewGame, 0);
           } else if (activeGameId === id) {
-              const nextId = Object.keys(newGames)[0];
-              setActiveGameId(nextId);
-              loadGameIntoState(newGames[nextId]);
+              nextActive = Object.keys(newGames)[0];
+              setActiveGameId(nextActive);
           }
           
-          localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeGameId: activeGameId === id ? Object.keys(newGames)[0] : activeGameId, games: newGames }));
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeGameId: nextActive, games: newGames }));
           return newGames;
       });
   };
 
-  const makeMove = (move, playerModel, reasoning = null) => {
-    try {
-      const result = game.move(move);
-      if (result) {
-        const newFen = game.fen();
-        setGame(new Chess(newFen));
-        
-        setHistoryItems((prev) => [...prev, {
-            san: result.san,
-            color: result.color === 'w' ? 'White' : 'Black',
-            model: playerModel,
-            reasoning: reasoning
-        }]);
-        setFenHistory((prev) => [...prev, newFen]);
+  const togglePause = (id) => {
+      if (games[id]) {
+          updateGame(id, { isPaused: !games[id].isPaused, status: !games[id].isPaused ? "Paused" : "Playing..." });
       }
-      return result;
-    } catch (e) {
-      return null;
-    }
-  };
-
-  const checkGameOver = () => {
-    // If we have an active error, don't overwrite it immediately with "Paused"
-    setStatus(prevStatus => {
-        if (prevStatus.includes("Error") && isPaused) return prevStatus;
-        
-        if (game.isCheckmate()) {
-          return `Checkmate! ${game.turn() === 'w' ? 'Black' : 'White'} wins!`;
-        } else if (game.isDraw()) {
-          return "Draw!";
-        } else {
-          return game.isCheck() ? "Check!" : (isPaused ? "Paused" : "Playing...");
-        }
-    });
   };
 
   const onDrop = (sourceSquare, targetSquare, piece) => {
-    if (isThinking) return false;
+    if (!activeGame || activeGame.isThinking || activeGame.isPaused) return false;
     
-    const isWhiteTurn = game.turn() === 'w';
-    if (isWhiteTurn && whitePlayer !== "Human") return false;
-    if (!isWhiteTurn && blackPlayer !== "Human") return false;
+    const isWhiteTurn = activeChess.turn() === 'w';
+    if (isWhiteTurn && activeGame.whitePlayer !== "Human") return false;
+    if (!isWhiteTurn && activeGame.blackPlayer !== "Human") return false;
 
-    const move = makeMove({
+    const move = {
       from: sourceSquare,
       to: targetSquare,
       promotion: piece[1].toLowerCase() ?? "q",
-    }, "Human");
+    };
 
-    return move !== null;
+    try {
+        const result = activeChess.move(move);
+        if (result) {
+            updateGame(activeGameId, {
+                historyItems: [...activeGame.historyItems, {
+                    san: result.san,
+                    color: result.color === 'w' ? 'White' : 'Black',
+                    model: "Human",
+                    reasoning: null
+                }],
+                fenHistory: [...activeGame.fenHistory, activeChess.fen()]
+            });
+            return true;
+        }
+    } catch(e) {}
+    return false;
   };
-
-  // Trigger AI moves
-  useEffect(() => {
-    if (!isLoaded || game.isGameOver() || isPaused) {
-        checkGameOver();
-        return;
-    }
-    
-    const isWhiteTurn = game.turn() === 'w';
-    const currentPlayer = isWhiteTurn ? whitePlayer : blackPlayer;
-
-    if (currentPlayer !== "Human" && !isThinking) {
-      setIsThinking(true);
-      setStatus(`AI (${currentPlayer}) is thinking...`);
-
-      fetch("/api/move", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fen: game.fen(), model: currentPlayer, history_san: historyItems.map(h => h.san) }),
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          setIsThinking(false);
-          if (data.success) {
-            const m = makeMove({
-              from: data.move.origin,
-              to: data.move.destination,
-              promotion: data.move.promotion || undefined
-            }, currentPlayer, data.move.reasoning);
-            
-            if(!m) {
-                 const newFen = data.fen;
-                 setGame(new Chess(newFen)); 
-                 setHistoryItems((prev) => [...prev, { san: `Forced: ${data.move.origin}->${data.move.destination}`, color: isWhiteTurn ? 'White':'Black', model: currentPlayer, reasoning: data.move.reasoning }]);
-                 setFenHistory((prev) => [...prev, newFen]);
-            }
-          } else {
-            setStatus(`AI Error: ${data.error}`);
-            setIsPaused(true);
-          }
-        })
-        .catch((err) => {
-          setIsThinking(false);
-          setStatus(`Network Error: ${err}`);
-          setIsPaused(true);
-        });
-    }
-  }, [game.fen(), whitePlayer, blackPlayer, isThinking, isPaused, isLoaded]);
 
   const resetGame = () => {
     if(!confirm("Resetar o tabuleiro atual?")) return;
-    const initialFen = new Chess().fen();
-    setGame(new Chess());
-    setHistoryItems([]);
-    setFenHistory([initialFen]);
-    setStatus("Game started.");
-    setIsThinking(false);
-    setIsPaused(true);
-  };
-
-  const handlePlayerChange = (setter) => (e) => {
-    setter(e.target.value);
-    setIsPaused(true); 
+    updateGame(activeGameId, {
+        historyItems: [],
+        fenHistory: [new Chess().fen()],
+        status: "Game started.",
+        isThinking: false,
+        isPaused: true,
+        plan: null
+    });
   };
 
   const rewindToTurn = (index) => {
-    const targetFen = fenHistory[index];
-    setGame(new Chess(targetFen));
-    setHistoryItems(historyItems.slice(0, index));
-    setFenHistory(fenHistory.slice(0, index + 1));
-    setIsPaused(true);
-    setIsThinking(false);
+    if (!activeGame) return;
+    updateGame(activeGameId, {
+        historyItems: activeGame.historyItems.slice(0, index),
+        fenHistory: activeGame.fenHistory.slice(0, index + 1),
+        isPaused: true,
+        isThinking: false,
+        plan: null
+    });
   };
+
+  // BACKGROUND GAME LOOP
+  useEffect(() => {
+      if (!isLoaded) return;
+      const interval = setInterval(() => {
+          setGames(prevGames => {
+              let updated = false;
+              const nextGames = { ...prevGames };
+              
+              Object.keys(nextGames).forEach(id => {
+                  const g = nextGames[id];
+                  if (g.isPaused || g.isThinking || (g.status && g.status.includes("Error"))) return;
+                  
+                  const chess = new Chess(g.fenHistory[g.fenHistory.length - 1]);
+                  if (chess.isGameOver()) {
+                      if (!g.status.includes("Checkmate") && !g.status.includes("Draw")) {
+                          let overStatus = chess.isCheckmate() ? `Checkmate! ${chess.turn() === 'w' ? 'Black' : 'White'} wins!` : "Draw!";
+                          nextGames[id] = { ...g, status: overStatus };
+                          updated = true;
+                      }
+                      return;
+                  }
+                  
+                  const isWhiteTurn = chess.turn() === 'w';
+                  const currentPlayer = isWhiteTurn ? g.whitePlayer : g.blackPlayer;
+                  if (currentPlayer === "Human") return; 
+
+                  // Check for conditional plan execution
+                  let executedPlan = false;
+                  if (g.plan && g.plan.length > 0) {
+                      const lastMove = g.historyItems[g.historyItems.length - 1]; // Opponent's last move
+                      const planStep = g.plan[0]; // Currently considering just 1 step lookahead
+                      
+                      if (lastMove && lastMove.san === planStep.if_opponent_plays) {
+                          const moveObj = {
+                              from: planStep.then_i_play_origin,
+                              to: planStep.then_i_play_destination,
+                              promotion: planStep.then_i_play_promotion || undefined
+                          };
+                          try {
+                              const result = chess.move(moveObj);
+                              if (result) {
+                                  nextGames[id] = {
+                                      ...g,
+                                      historyItems: [...g.historyItems, {
+                                          san: result.san,
+                                          color: isWhiteTurn ? 'White' : 'Black',
+                                          model: currentPlayer,
+                                          reasoning: "⚡ Pré-Move Condicional Executado! (O oponente fez exatamente o que eu esperava: " + lastMove.san + ")"
+                                      }],
+                                      fenHistory: [...g.fenHistory, chess.fen()],
+                                      plan: null // consume plan
+                                  };
+                                  updated = true;
+                                  executedPlan = true;
+                              }
+                          } catch (e) {
+                              console.warn("Invalid planned move", e);
+                          }
+                      }
+                  }
+
+                  if (!executedPlan) {
+                      nextGames[id] = { ...g, isThinking: true, status: `AI (${currentPlayer}) is thinking...`, plan: null };
+                      updated = true;
+                      
+                      fetch("/api/move", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ 
+                              fen: chess.fen(), 
+                              model: currentPlayer, 
+                              history_san: g.historyItems.map(h => `${h.color} (${h.model}): ${h.san} - Reasoning: ${h.reasoning || 'N/A'}`) 
+                          }),
+                      })
+                      .then(res => res.json())
+                      .then(data => {
+                          setGames(currGames => {
+                              const currG = currGames[id];
+                              if (!currG) return currGames;
+                              
+                              const currChess = new Chess(currG.fenHistory[currG.fenHistory.length - 1]);
+                              
+                              if (data.success) {
+                                  try {
+                                      const m = currChess.move({
+                                          from: data.move.origin,
+                                          to: data.move.destination,
+                                          promotion: data.move.promotion || undefined
+                                      });
+                                      if (m) {
+                                          return {
+                                              ...currGames,
+                                              [id]: {
+                                                  ...currG,
+                                                  isThinking: false,
+                                                  status: "Playing...",
+                                                  historyItems: [...currG.historyItems, {
+                                                      san: m.san,
+                                                      color: isWhiteTurn ? 'White' : 'Black',
+                                                      model: currentPlayer,
+                                                      reasoning: data.move.reasoning
+                                                  }],
+                                                  fenHistory: [...currG.fenHistory, currChess.fen()],
+                                                  plan: data.move.plan || null
+                                              }
+                                          };
+                                      } else {
+                                          throw new Error("Invalid move returned");
+                                      }
+                                  } catch (e) {
+                                       // Fallback for forced move if chess.js rejects it but engine says it's legal?
+                                       // Better to just throw error to prevent desync
+                                       return { ...currGames, [id]: { ...currG, isThinking: false, status: `AI Move Error: ${e.message}`, isPaused: true } };
+                                  }
+                              } else {
+                                  return { ...currGames, [id]: { ...currG, isThinking: false, status: `AI Error: ${data.error}`, isPaused: true } };
+                              }
+                          });
+                      }).catch(err => {
+                          setGames(cg => ({ ...cg, [id]: { ...cg[id], isThinking: false, status: `Network Error: ${err}`, isPaused: true } }));
+                      });
+                  }
+              });
+              
+              if (updated) {
+                  localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeGameId: prevGames.activeGameId, games: nextGames }));
+                  return nextGames;
+              }
+              return prevGames;
+          });
+      }, 700); // Poll every 700ms
+      return () => clearInterval(interval);
+  }, [isLoaded]);
+
+  if (!isLoaded || !activeGame) return html`<div>Loading...</div>`;
 
   // Eval bar calculations
   let fillPercentage = 50;
   let evalText = "0.0";
   
   if (evalScore) {
-      const isWhiteTurn = game.turn() === 'w';
-      
+      const isWhiteTurn = activeChess.turn() === 'w';
       if (evalScore.type === 'mate') {
-          // Mate in X
           const mateIn = evalScore.value;
-          // If mateIn is positive, side to move is winning
           fillPercentage = (isWhiteTurn && mateIn > 0) || (!isWhiteTurn && mateIn < 0) ? 100 : 0;
           evalText = `M${Math.abs(mateIn)}`;
       } else {
-          // Centipawns
           let cp = evalScore.value;
-          // stockfish returns score relative to the side to move
           if (!isWhiteTurn) cp = -cp; 
-          
           evalText = (cp / 100).toFixed(1);
           if (cp > 0) evalText = "+" + evalText;
-          
-          // Map -1000 to +1000 into 0% to 100% logarithmically or linearly
-          // Cap at +/- 10 pawns
           const cappedCp = Math.max(-1000, Math.min(1000, cp));
-          fillPercentage = 50 + (cappedCp / 20); // 1000cp / 20 = 50 -> 100%
+          fillPercentage = 50 + (cappedCp / 20); 
       }
   }
-
-  if (!isLoaded) return html`<div>Loading...</div>`;
 
   return html`
     <div className="sidebar">
@@ -364,13 +386,18 @@ function App() {
         
         <div style=${{ flex: 1, overflowY: 'auto' }}>
             ${Object.keys(games).map(id => html`
-                <div key=${id} className=${`game-item ${id === activeGameId ? 'active' : ''}`} onClick=${() => switchGame(id)}>
-                    <span style=${{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div key=${id} className=${`game-item ${id === activeGameId ? 'active' : ''}`} onClick=${() => setActiveGameId(id)}>
+                    <span style=${{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                         ${games[id].name}
                     </span>
-                    <button className="delete-btn" title="Apagar Jogo" onClick=${(e) => { e.stopPropagation(); deleteGame(id); }}>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-                    </button>
+                    <div style=${{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                        <button className="play-btn" onClick=${(e) => { e.stopPropagation(); togglePause(id); }} title=${games[id].isPaused ? "Play" : "Pause"} style=${{ background: 'transparent', border: 'none', cursor: 'pointer', color: games[id].isPaused ? '#94a3b8' : '#10b981', padding: '0 4px', fontSize: '1.2rem' }}>
+                            ${games[id].isPaused ? "▶" : "⏸"}
+                        </button>
+                        <button className="delete-btn" title="Apagar Jogo" onClick=${(e) => { e.stopPropagation(); deleteGame(id); }}>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                        </button>
+                    </div>
                 </div>
             `)}
         </div>
@@ -388,9 +415,9 @@ function App() {
             
             <div className="board-container">
               <${Chessboard} 
-                  position=${game.fen()} 
+                  position=${activeChess.fen()} 
                   onPieceDrop=${onDrop}
-                  boardOrientation=${whitePlayer === 'Human' || (whitePlayer !== 'Human' && blackPlayer !== 'Human') ? 'white' : 'black'}
+                  boardOrientation=${activeGame.whitePlayer === 'Human' || (activeGame.whitePlayer !== 'Human' && activeGame.blackPlayer !== 'Human') ? 'white' : 'black'}
               />
             </div>
         </div>
@@ -404,7 +431,7 @@ function App() {
           
           <div className="form-group">
             <label>Brancas:</label>
-            <select value=${whitePlayer} onChange=${handlePlayerChange(setWhitePlayer)}>
+            <select value=${activeGame.whitePlayer} onChange=${e => updateGame(activeGameId, { whitePlayer: e.target.value, isPaused: true })}>
               <option value="Human">Humano</option>
               ${models.map(m => html`<option key=${m} value=${m}>${m}</option>`)}
             </select>
@@ -412,7 +439,7 @@ function App() {
   
           <div className="form-group">
             <label>Pretas:</label>
-            <select value=${blackPlayer} onChange=${handlePlayerChange(setBlackPlayer)}>
+            <select value=${activeGame.blackPlayer} onChange=${e => updateGame(activeGameId, { blackPlayer: e.target.value, isPaused: true })}>
               <option value="Human">Humano</option>
               ${models.map(m => html`<option key=${m} value=${m}>${m}</option>`)}
             </select>
@@ -420,23 +447,23 @@ function App() {
   
           <div style=${{ display: 'flex', gap: '10px' }}>
               <button 
-                  onClick=${() => setIsPaused(!isPaused)}
-                  className=${isPaused ? 'btn-green' : 'btn-orange'}
+                  onClick=${() => togglePause(activeGameId)}
+                  className=${activeGame.isPaused ? 'btn-green' : 'btn-orange'}
                   style=${{ flex: 1 }}
               >
-                  ${isPaused ? "▶ Iniciar / Continuar IA" : "⏸ Pausar IA"}
+                  ${activeGame.isPaused ? "▶ Iniciar / Continuar IA" : "⏸ Pausar IA"}
               </button>
               <button onClick=${resetGame} className="btn-red" style=${{ flex: 1 }}>
                   Resetar Tabuleiro
               </button>
           </div>
   
-          <div className=${`status ${status.includes("Error") ? 'error' : (status.includes("Check") ? 'success' : '')}`}>
-            Status: ${status}
+          <div className=${`status ${activeGame.status.includes("Error") ? 'error' : (activeGame.status.includes("Check") ? 'success' : '')}`}>
+            Status: ${activeGame.status}
           </div>
   
           <div className="history">
-            ${historyItems.length === 0 ? "Sem jogadas ainda." : historyItems.map((item, i) => html`
+            ${activeGame.historyItems.length === 0 ? "Sem jogadas ainda." : activeGame.historyItems.map((item, i) => html`
               <div 
                   key=${i} 
                   className="history-item"

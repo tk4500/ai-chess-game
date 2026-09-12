@@ -3,15 +3,22 @@ import json
 import re
 from openai import OpenAI
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from openai import OpenAI
 import os
 
+class PlanStep(BaseModel):
+    if_opponent_plays: str = Field(description="The SAN notation of the move you expect the opponent to play (e.g. 'e5', 'Nf3')")
+    then_i_play_origin: str = Field(description="Your planned response origin square (e.g. 'e4')")
+    then_i_play_destination: str = Field(description="Your planned response destination square (e.g. 'e5')")
+    then_i_play_promotion: Optional[str] = Field(None, description="Promotion piece, e.g. 'q', 'r', 'b', 'n' or null")
+
 class ChessMove(BaseModel):
-    reasoning: str = Field(description="Briefly explain your thought process, evaluate the board, and explain why this is the best move. Do this BEFORE deciding the move.")
-    origin: str = Field(description="The starting square of the piece to move, e.g. 'e2'")
-    destination: str = Field(description="The destination square to move to, e.g. 'e4'")
-    promotion: Optional[str] = Field(None, description="If promoting a pawn, the piece type (e.g. 'q', 'r', 'b', 'n'). Omit otherwise.")
+    reasoning: str = Field(description="Your thoughts behind this move, strategy, and analysis of the opponent's last move")
+    origin: str = Field(description="The starting square of your move (e.g., 'e2')")
+    destination: str = Field(description="The ending square of your move (e.g., 'e4')")
+    promotion: Optional[str] = Field(None, description="Promotion piece, e.g. 'q', 'r', 'b', 'n' or null")
+    plan: Optional[List[PlanStep]] = Field(None, description="Optional. Plan your next moves! If the opponent plays a specific move (if_opponent_plays), you can automatically execute a response. Leave null if unsure.")
 
 def get_client():
     api_key = os.getenv("OPENAI_API_KEY", "")
@@ -35,11 +42,20 @@ def generate_move(model_name: str, board_json: dict, history: list, history_san:
     
     messages = [{"role": "system", "content": system_prompt}]
     
+    # Format recent history to limit to ~5 last thoughts
+    history_text = "No moves made yet."
+    if history_san:
+        # history_san might contain dicts like {'san': 'e4', 'reasoning': '...'} or just strings
+        # We need to adapt it. If it's a list of dicts, we extract it.
+        # Let's assume the frontend sends a list of strings or we format it beforehand.
+        recent_moves = history_san[-5:]  # Last 5 moves
+        history_text = "\n".join(recent_moves)
+        
     board_prompt = (
         f"Current turn: {board_json['turn']}\n"
         f"Is in check: {board_json['in_check']}\n\n"
-        f"### Match History (Past Moves in SAN) ###\n"
-        f"{', '.join(history_san) if history_san else 'No moves made yet.'}\n\n"
+        f"### Recent Match History (Last 5 moves & thoughts) ###\n"
+        f"{history_text}\n\n"
         f"### Legal Moves Available ###\n"
         f"You MUST choose one of the following exact moves:\n"
         f"{json.dumps(board_json['legal_moves'])}\n\n"
