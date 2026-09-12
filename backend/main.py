@@ -74,6 +74,11 @@ def ai_make_move(request: MoveRequest):
                 return MoveResponse(success=False, fen=board.fen(), error=f"AI generation failed: {result['error']}", retries=attempt)
         
         ai_move = result["move"]
+        
+        # Defensive parsing: If the model wrapped the response in a "move" object, unwrap it
+        if ai_move and "move" in ai_move and isinstance(ai_move["move"], dict):
+            ai_move = ai_move["move"]
+            
         if not ai_move or "origin" not in ai_move or "destination" not in ai_move:
              history.append({"role": "assistant", "content": "Failed to output structured JSON."})
              history.append({"role": "user", "content": "You must respond with the structured JSON output containing origin and destination."})
