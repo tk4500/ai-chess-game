@@ -40,7 +40,7 @@ Uma plataforma premium de Xadrez desenvolvida em Python (FastAPI) e JavaScript (
 
 1. **Clone o repositório:**
    ```bash
-   git clone https://github.com/SeuUsuario/ai-chess-game.git
+   git clone https://github.com/tk4500/ai-chess-game.git
    cd ai-chess-game
    ```
 
