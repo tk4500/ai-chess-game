@@ -114,7 +114,10 @@ function App() {
   const updateGame = (id, updates) => {
       setGames(prev => {
           const newGames = { ...prev, [id]: { ...prev[id], ...updates } };
-          localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeGameId: prev.activeGameId, games: newGames }));
+          // We can't use prev.activeGameId because prev is just the games object.
+          // We rely on the closure's activeGameId, which is mostly fine for active game updates,
+          // but to be absolutely safe, we can fetch it from localStorage or just use the closure's activeGameId.
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeGameId, games: newGames }));
           return newGames;
       });
   };
@@ -164,9 +167,13 @@ function App() {
   };
 
   const togglePause = (id) => {
-      if (games[id]) {
-          updateGame(id, { isPaused: !games[id].isPaused, status: !games[id].isPaused ? "Paused" : "Playing..." });
-      }
+      setGames(prev => {
+          const g = prev[id];
+          if (!g) return prev;
+          const newGames = { ...prev, [id]: { ...g, isPaused: !g.isPaused, status: !g.isPaused ? "Paused" : "Playing..." } };
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeGameId, games: newGames }));
+          return newGames;
+      });
   };
 
   const onDrop = (sourceSquare, targetSquare, piece) => {

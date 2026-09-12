@@ -74,6 +74,33 @@ def generate_move(model_name: str, board_json: dict, history: list, history_san:
         
     try:
         client = get_client()
+        inline_schema = {
+            "type": "object",
+            "properties": {
+                "reasoning": {"type": "string", "description": "Your thoughts behind this move"},
+                "origin": {"type": "string", "description": "The starting square of your move (e.g., 'e2')"},
+                "destination": {"type": "string", "description": "The ending square of your move (e.g., 'e4')"},
+                "promotion": {"type": ["string", "null"], "description": "Promotion piece, e.g. 'q' or null"},
+                "plan": {
+                    "type": ["array", "null"],
+                    "description": "Optional contingent moves.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "if_opponent_plays": {"type": "string"},
+                            "then_i_play_origin": {"type": "string"},
+                            "then_i_play_destination": {"type": "string"},
+                            "then_i_play_promotion": {"type": ["string", "null"]}
+                        },
+                        "required": ["if_opponent_plays", "then_i_play_origin", "then_i_play_destination", "then_i_play_promotion"],
+                        "additionalProperties": False
+                    }
+                }
+            },
+            "required": ["reasoning", "origin", "destination", "promotion", "plan"],
+            "additionalProperties": False
+        }
+
         response = client.chat.completions.create(
             model=model_name,
             messages=messages,
@@ -81,7 +108,7 @@ def generate_move(model_name: str, board_json: dict, history: list, history_san:
                 "type": "json_schema",
                 "json_schema": {
                     "name": "chess_move",
-                    "schema": ChessMove.model_json_schema(),
+                    "schema": inline_schema,
                     "strict": True
                 }
             },
