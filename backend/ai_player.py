@@ -18,7 +18,7 @@ def get_client():
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     return OpenAI(api_key=api_key, base_url=base_url)
 
-def generate_move(model_name: str, board_json: dict, history: list) -> dict:
+def generate_move(model_name: str, board_json: dict, history: list, history_san: list = None) -> dict:
     """
     history: a list of message dicts (role, content) for retries.
     Returns the updated history and the parsed move.
@@ -35,10 +35,11 @@ def generate_move(model_name: str, board_json: dict, history: list) -> dict:
     
     messages = [{"role": "system", "content": system_prompt}]
     
-    # Base prompt with the board state
     board_prompt = (
         f"Current turn: {board_json['turn']}\n"
         f"Is in check: {board_json['in_check']}\n\n"
+        f"### Match History (Past Moves in SAN) ###\n"
+        f"{', '.join(history_san) if history_san else 'No moves made yet.'}\n\n"
         f"### Legal Moves Available ###\n"
         f"You MUST choose one of the following exact moves:\n"
         f"{json.dumps(board_json['legal_moves'])}\n\n"

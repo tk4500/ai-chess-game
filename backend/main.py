@@ -35,6 +35,7 @@ def read_root():
 class MoveRequest(BaseModel):
     fen: str
     model: str
+    history_san: Optional[List[str]] = []
 
 class MoveResponse(BaseModel):
     success: bool
@@ -63,7 +64,7 @@ def ai_make_move(request: MoveRequest):
     max_retries = 5
     
     for attempt in range(max_retries):
-        result = generate_move(request.model, board_json, history)
+        result = generate_move(request.model, board_json, history, request.history_san)
         if result["error"]:
             if "JSON Parse Error" in result["error"]:
                 raw = result.get("raw_content", "")
@@ -77,7 +78,10 @@ def ai_make_move(request: MoveRequest):
         
         # Defensive parsing: If the model wrapped the response in a "move" object, unwrap it
         if ai_move and "move" in ai_move and isinstance(ai_move["move"], dict):
-            ai_move = ai_move["move"]
+            actual_move = ai_move["move"]
+            if "reasoning" in ai_move:
+                actual_move["reasoning"] = ai_move["reasoning"]
+            ai_move = actual_move
             
         if not ai_move or "origin" not in ai_move or "destination" not in ai_move:
              history.append({"role": "assistant", "content": "Failed to output structured JSON."})

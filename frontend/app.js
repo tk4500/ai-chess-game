@@ -201,7 +201,7 @@ function App() {
       });
   };
 
-  const makeMove = (move, playerModel) => {
+  const makeMove = (move, playerModel, reasoning = null) => {
     try {
       const result = game.move(move);
       if (result) {
@@ -211,7 +211,8 @@ function App() {
         setHistoryItems((prev) => [...prev, {
             san: result.san,
             color: result.color === 'w' ? 'White' : 'Black',
-            model: playerModel
+            model: playerModel,
+            reasoning: reasoning
         }]);
         setFenHistory((prev) => [...prev, newFen]);
       }
@@ -269,7 +270,7 @@ function App() {
       fetch("/api/move", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fen: game.fen(), model: currentPlayer }),
+        body: JSON.stringify({ fen: game.fen(), model: currentPlayer, history_san: historyItems.map(h => h.san) }),
       })
         .then((res) => res.json())
         .then((data) => {
@@ -279,12 +280,12 @@ function App() {
               from: data.move.origin,
               to: data.move.destination,
               promotion: data.move.promotion || undefined
-            }, currentPlayer);
+            }, currentPlayer, data.move.reasoning);
             
             if(!m) {
                  const newFen = data.fen;
                  setGame(new Chess(newFen)); 
-                 setHistoryItems((prev) => [...prev, { san: `Forced: ${data.move.origin}->${data.move.destination}`, color: isWhiteTurn ? 'White':'Black', model: currentPlayer }]);
+                 setHistoryItems((prev) => [...prev, { san: `Forced: ${data.move.origin}->${data.move.destination}`, color: isWhiteTurn ? 'White':'Black', model: currentPlayer, reasoning: data.move.reasoning }]);
                  setFenHistory((prev) => [...prev, newFen]);
             }
           } else {
@@ -440,7 +441,7 @@ function App() {
                   key=${i} 
                   className="history-item"
                   onClick=${() => rewindToTurn(i)} 
-                  title="Clique para voltar no tempo antes deste turno"
+                  title=${item.reasoning ? `[${item.model}] Raciocínio:\n${item.reasoning}\n\n(Clique para voltar)` : "Clique para voltar no tempo antes deste turno"}
               >
                   <strong>${i+1}. ${item.color}:</strong> ${item.san} 
                   <span className="model-badge">${item.model}</span>
