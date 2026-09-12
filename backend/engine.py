@@ -35,12 +35,20 @@ def get_board_state_json(board: chess.Board) -> dict:
                 "color": "white" if piece.color == chess.WHITE else "black",
                 "piece": PIECE_NAMES[piece.piece_type]
             })
-            
+    legal_moves = []
+    for move in board.legal_moves:
+        legal_moves.append({
+            "origin": chess.square_name(move.from_square),
+            "destination": chess.square_name(move.to_square),
+            "promotion": chess.piece_symbol(move.promotion) if move.promotion else None
+        })
+
     return {
         "turn": "white" if board.turn == chess.WHITE else "black",
         "in_check": board.is_check(),
         "is_checkmate": board.is_checkmate(),
         "is_stalemate": board.is_stalemate(),
+        "legal_moves": legal_moves,
         "pieces": pieces,
         "markdown_grid": get_markdown_board(board),
         "fen": board.fen() # useful for the frontend, but we won't emphasize it to the AI
