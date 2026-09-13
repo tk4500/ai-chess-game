@@ -163,12 +163,20 @@ def generate_move(model_name: str, board_json: dict, history: list, history_item
             "type": "object",
             "properties": {
                 "reasoning": {"type": "string", "description": "Your thoughts behind this move"},
-                "origin": {"type": "string", "description": "The starting square of your move (e.g., 'e2')"},
-                "destination": {"type": "string", "description": "The ending square of your move (e.g., 'e4')"},
-                "promotion": {"type": ["string", "null"], "description": "Promotion piece, e.g. 'q' or null"},
+                "move": {
+                    "type": "object",
+                    "description": "The final move to play",
+                    "properties": {
+                        "origin": {"type": "string", "description": "The starting square (e.g., 'e2')"},
+                        "destination": {"type": "string", "description": "The ending square (e.g., 'e4')"},
+                        "promotion": {"type": ["string", "null"], "description": "Promotion piece, e.g. 'q' or null"}
+                    },
+                    "required": ["origin", "destination"],
+                    "additionalProperties": False
+                },
                 "plan": {
                     "type": ["array", "null"],
-                    "description": "Optional contingent moves. E.g., if you play a check or capture, predict the forced response here.",
+                    "description": "Optional contingent moves.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -182,7 +190,7 @@ def generate_move(model_name: str, board_json: dict, history: list, history_item
                     }
                 }
             },
-            "required": ["reasoning", "origin", "destination", "promotion", "plan"],
+            "required": ["reasoning", "move", "plan"],
             "additionalProperties": False
         }
 
@@ -217,15 +225,45 @@ def generate_move(model_name: str, board_json: dict, history: list, history_item
                 
             move_data = json.loads(json_str)
             
-            # Robustness: If the model nested the move inside "best_move", flatten it
-            if "best_move" in move_data and isinstance(move_data["best_move"], dict):
-                if "origin" in move_data["best_move"] and "destination" in move_data["best_move"]:
-                    move_data["origin"] = move_data["best_move"]["origin"]
-                    move_data["destination"] = move_data["best_move"]["destination"]
-                    if "promotion" in move_data["best_move"]:
-                        move_data["promotion"] = move_data["best_move"]["promotion"]
+            # Robustness: Generic deep search for the move object
+            actual_move = move_data
+            
+            def find_move(d):
+                if isinstance(d, dict):
+                    if "origin" in d and "destination" in d and "if_opponent_plays" not in d:
+                        return d
+                    for k, v in d.items():
+                        # Skip keys that contain lists of alternative moves or opponent's future moves
+                        if k in ["plan", "candidates", "candidate_moves", "sanity_checks"]:
+                            continue
+                        if isinstance(v, dict):
+                            found = find_move(v)
+                            if found:
+                                return found
+                return None
+                
+            found_move = find_move(move_data)
+            if found_move:
+                actual_move = found_move
                         
-            return {"move": move_data, "error": None, "raw_content": raw_content}
+            # Re-flatten into the exact format main.py expects
+            
+            # Extract reasoning from any likely key
+            reasoning = ""
+            for r_key in ["reasoning", "reasoning_summary", "thought_process", "strategic_purpose", "thoughts", "explanation"]:
+                if r_key in move_data and isinstance(move_data[r_key], str):
+                    reasoning = move_data[r_key]
+                    break
+                    
+            result_data = {
+                "origin": actual_move.get("origin"),
+                "destination": actual_move.get("destination"),
+                "promotion": actual_move.get("promotion"),
+                "reasoning": reasoning,
+                "plan": move_data.get("plan", [])
+            }
+                        
+            return {"move": result_data, "error": None, "raw_content": raw_content}
         except json.JSONDecodeError as e:
             print(f"[{model_name}] JSON Parse Error: {str(e)}")
             return {"move": None, "error": f"JSON Parse Error: {str(e)}", "raw_content": raw_content}
