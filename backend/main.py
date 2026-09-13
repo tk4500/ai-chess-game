@@ -32,10 +32,18 @@ app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 def read_root():
     return FileResponse(os.path.join(frontend_dir, "index.html"))
 
+class HistoryItem(BaseModel):
+    san: str
+    color: str
+    model: str
+    reasoning: Optional[str] = None
+    plan: Optional[list] = None
+
 class MoveRequest(BaseModel):
     fen: str
     model: str
-    history_san: Optional[List[str]] = []
+    history_items: Optional[List[HistoryItem]] = []
+    full_san_history: Optional[List[str]] = []
 
 class MoveResponse(BaseModel):
     success: bool
@@ -64,7 +72,7 @@ def ai_make_move(request: MoveRequest):
     max_retries = 5
     
     for attempt in range(max_retries):
-        result = generate_move(request.model, board_json, history, request.history_san)
+        result = generate_move(request.model, board_json, history, request.history_items, request.full_san_history)
         if result["error"]:
             if "JSON Parse Error" in result["error"]:
                 raw = result.get("raw_content", "")

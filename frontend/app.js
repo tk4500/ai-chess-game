@@ -258,11 +258,11 @@ function App() {
 
                   // Check for conditional plan execution
                   let executedPlan = false;
-                  if (g.plan && g.plan.length > 0) {
+                  if (g.plan && Array.isArray(g.plan) && g.plan.length > 0) {
                       const lastMove = g.historyItems[g.historyItems.length - 1]; // Opponent's last move
                       const planStep = g.plan[0]; // Currently considering just 1 step lookahead
                       
-                      if (lastMove && lastMove.san === planStep.if_opponent_plays) {
+                      if (lastMove && planStep && lastMove.san === planStep.if_opponent_plays) {
                           const moveObj = {
                               from: planStep.then_i_play_origin,
                               to: planStep.then_i_play_destination,

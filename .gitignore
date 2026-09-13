@@ -43,3 +43,4 @@ Thumbs.db
 # Project Specific
 backend/.env
 backend/__pycache__/
+gamesexample.json

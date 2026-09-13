@@ -25,55 +25,140 @@ def get_client():
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     return OpenAI(api_key=api_key, base_url=base_url)
 
-def generate_move(model_name: str, board_json: dict, history: list, history_san: list = None) -> dict:
+def generate_move(model_name: str, board_json: dict, history: list, history_items: list = None, full_san_history: list = None) -> dict:
     """
     history: a list of message dicts (role, content) for retries.
     Returns the updated history and the parsed move.
     """
-    system_prompt = (
+    pass1_system_prompt = (
         "You are a chess master AI. "
-        "You will be given the current state of a chess board, represented both as a Markdown Grid (where uppercase = White, lowercase = Black) "
-        "and as a JSON list of pieces. "
-        "Your task is to respond with the best valid chess move for the current turn. "
-        "You MUST respond ONLY with the structured JSON output matching the schema. "
-        "Use the 'reasoning' field in the schema to think through your move step-by-step to avoid invalid moves. "
-        "Pay extreme attention to pieces that are pinned or protecting the King."
+        "Your task is to analyze the board and return a ranked list of the top 3 to 5 candidate moves.\n"
+        "You MUST respond ONLY with the structured JSON output matching the schema."
     )
+    pass1_messages = [{"role": "system", "content": pass1_system_prompt}]
     
-    messages = [{"role": "system", "content": system_prompt}]
+    # Format the complete SAN moveset
+    full_moveset_text = "No moves made yet."
+    if full_san_history:
+        # Group into move numbers: 1. e4 e5 2. Nf3 Nc6 ...
+        moveset_parts = []
+        for i in range(0, len(full_san_history), 2):
+            move_num = (i // 2) + 1
+            white_move = full_san_history[i]
+            black_move = full_san_history[i+1] if i+1 < len(full_san_history) else ""
+            moveset_parts.append(f"{move_num}. {white_move} {black_move}".strip())
+        full_moveset_text = " ".join(moveset_parts)
     
-    # Format recent history to limit to ~5 last thoughts
-    history_text = "No moves made yet."
-    if history_san:
-        # history_san might contain dicts like {'san': 'e4', 'reasoning': '...'} or just strings
-        # We need to adapt it. If it's a list of dicts, we extract it.
-        # Let's assume the frontend sends a list of strings or we format it beforehand.
-        recent_moves = history_san[-5:]  # Last 5 moves
-        history_text = "\n".join(recent_moves)
+    # Format the recent history context (reasoning and plans)
+    recent_history_text = "No detailed history available."
+    if history_items:
+        history_lines = []
+        for item in history_items:
+            # history_item is a dict because it comes from FastAPI parsing MoveRequest models (so it's a dict or Pydantic object)
+            # Assuming FastAPI passes it as a dict since it's inside a BaseModel and we access it via dot notation if it's an object?
+            # Wait, request.history_items is a list of HistoryItem objects. We can access via dot notation if Pydantic, or dict notation if dict.
+            # To be safe, let's use a helper to get attrs.
+            item_dict = item.model_dump() if hasattr(item, "model_dump") else item if isinstance(item, dict) else item.dict()
+            san = item_dict.get("san")
+            color = item_dict.get("color")
+            model = item_dict.get("model")
+            reasoning = item_dict.get("reasoning")
+            plan = item_dict.get("plan")
+            
+            line = f"--- Move by {color} ({model}) ---\nMove: {san}"
+            if reasoning:
+                line += f"\nReasoning: {reasoning}"
+            if plan:
+                line += f"\nPlan: {json.dumps(plan)}"
+            history_lines.append(line)
+        recent_history_text = "\n\n".join(history_lines)
         
     board_prompt = (
-        f"Current turn: {board_json['turn']}\n"
+        f"### Complete Match Moveset (PGN-style) ###\n"
+        f"{full_moveset_text}\n\n"
+        f"### Detailed Context (Last Few Moves) ###\n"
+        f"{recent_history_text}\n\n"
+        f"### Current Board State ###\n"
+        f"Turn: {board_json['turn']}\n"
         f"Is in check: {board_json['in_check']}\n\n"
-        f"### Recent Match History (Last 5 moves & thoughts) ###\n"
-        f"{history_text}\n\n"
+        f"### Board Markdown Grid ###\n{board_json['markdown_grid']}\n\n"
+        f"### Pieces List ###\n{json.dumps(board_json['pieces'])}\n\n"
         f"### Legal Moves Available ###\n"
         f"You MUST choose one of the following exact moves:\n"
         f"{json.dumps(board_json['legal_moves'])}\n\n"
-        f"### Board Markdown Grid ###\n{board_json['markdown_grid']}\n\n"
-        f"### Pieces List ###\n{json.dumps(board_json['pieces'])}\n\n"
-        f"Please provide your reasoning and move in the structured JSON format."
+        f"Please provide your reasoning, move, and plan in the structured JSON format."
     )
     
-    # If this is the first attempt for this turn, start fresh
-    if not history:
-        messages.append({"role": "user", "content": board_prompt})
-    else:
-        # We have a history of failed attempts for this specific turn
-        messages.append({"role": "user", "content": board_prompt})
-        messages.extend(history)
+    # If we have a history of failed attempts for this specific turn, append them to the prompt
+    if history:
+        error_messages = [msg["content"] for msg in history if msg["role"] == "user" and "Invalid move" in msg["content"] or "JSON" in msg["content"]]
+        if error_messages:
+            board_prompt += f"\n\n### PREVIOUS ATTEMPT ERRORS ###\n" + "\n".join(error_messages) + "\nDo not repeat the moves that caused these errors."
+            
+    pass1_messages.append({"role": "user", "content": board_prompt})
         
     try:
         client = get_client()
+        
+        # PASS 1: Ranking Schema
+        ranking_schema = {
+            "type": "object",
+            "properties": {
+                "candidates": {
+                    "type": "array",
+                    "description": "A ranked list of top 3 to 5 candidate moves.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "san": {"type": "string", "description": "The SAN notation of the candidate move (e.g. 'e4', 'Nf3')"},
+                            "reasoning": {"type": "string", "description": "Why this move is a good candidate."}
+                        },
+                        "required": ["san", "reasoning"],
+                        "additionalProperties": False
+                    }
+                }
+            },
+            "required": ["candidates"],
+            "additionalProperties": False
+        }
+
+        response1 = client.chat.completions.create(
+            model=model_name,
+            messages=pass1_messages,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "chess_candidates",
+                    "schema": ranking_schema
+                }
+            },
+            temperature=0.3
+        )
+        
+        if not response1.choices[0].message.content:
+            print(f"[{model_name}] AI returned empty content on Pass 1.")
+            return {"move": None, "error": "AI returned empty content on Pass 1", "raw_content": ""}
+            
+        pass1_content = response1.choices[0].message.content
+        print(f"\n--- AI PASS 1 (Candidates) ({model_name}) ---\n{pass1_content}\n-----------------------------\n")
+        
+        # PASS 2: Sanity Check and Final Selection
+        pass2_system_prompt = (
+            "You are a chess master AI. "
+            "You MUST respond ONLY with the structured JSON output matching the schema.\n"
+            "IMPORTANT REASONING RULES:\n"
+            "1. Step-by-step: Evaluate your given candidate moves.\n"
+            "2. Threat Check: You MUST explicitly verify if your destination square is attacked by enemy pawns or sliding pieces (bishops/rooks/queens) before deciding it is safe.\n"
+            "3. Planning: Use the 'plan' array for forcing lines. If your move delivers a check or creates an immediate threat, predict the opponent's forced response (if_opponent_plays) and your planned counter-move (then_i_play_origin/destination). If unsure, leave null."
+        )
+        
+        pass2_messages = pass1_messages.copy()
+        pass2_messages[0] = {"role": "system", "content": pass2_system_prompt}
+        pass2_messages.append({"role": "assistant", "content": pass1_content})
+        pass2_messages.append({
+            "role": "user",
+            "content": "Here are your top candidates. Perform a strict sanity check on each. Verify piece safety and avoid blunders. Then, select the BEST move from these candidates and output it using the final schema."
+        })
         inline_schema = {
             "type": "object",
             "properties": {
@@ -83,7 +168,7 @@ def generate_move(model_name: str, board_json: dict, history: list, history_san:
                 "promotion": {"type": ["string", "null"], "description": "Promotion piece, e.g. 'q' or null"},
                 "plan": {
                     "type": ["array", "null"],
-                    "description": "Optional contingent moves.",
+                    "description": "Optional contingent moves. E.g., if you play a check or capture, predict the forced response here.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -101,27 +186,26 @@ def generate_move(model_name: str, board_json: dict, history: list, history_san:
             "additionalProperties": False
         }
 
-        response = client.chat.completions.create(
+        response2 = client.chat.completions.create(
             model=model_name,
-            messages=messages,
+            messages=pass2_messages,
             response_format={
                 "type": "json_schema",
                 "json_schema": {
                     "name": "chess_move",
-                    "schema": inline_schema,
-                    "strict": True
+                    "schema": inline_schema
                 }
             },
             temperature=0.1
         )
         
         # Check if the content is returned
-        if not response.choices[0].message.content:
-            print(f"[{model_name}] AI returned empty content.")
-            return {"move": None, "error": "AI returned empty content", "raw_content": ""}
+        if not response2.choices[0].message.content:
+            print(f"[{model_name}] AI returned empty content on Pass 2.")
+            return {"move": None, "error": "AI returned empty content on Pass 2", "raw_content": ""}
             
-        raw_content = response.choices[0].message.content
-        print(f"\n--- AI RESPONSE ({model_name}) ---\n{raw_content}\n-----------------------------\n")
+        raw_content = response2.choices[0].message.content
+        print(f"\n--- AI PASS 2 (Final Decision) ({model_name}) ---\n{raw_content}\n-----------------------------\n")
         
         try:
             # Robustly extract JSON block even if the model added conversational text before or after
@@ -132,6 +216,15 @@ def generate_move(model_name: str, board_json: dict, history: list, history_san:
                 json_str = raw_content
                 
             move_data = json.loads(json_str)
+            
+            # Robustness: If the model nested the move inside "best_move", flatten it
+            if "best_move" in move_data and isinstance(move_data["best_move"], dict):
+                if "origin" in move_data["best_move"] and "destination" in move_data["best_move"]:
+                    move_data["origin"] = move_data["best_move"]["origin"]
+                    move_data["destination"] = move_data["best_move"]["destination"]
+                    if "promotion" in move_data["best_move"]:
+                        move_data["promotion"] = move_data["best_move"]["promotion"]
+                        
             return {"move": move_data, "error": None, "raw_content": raw_content}
         except json.JSONDecodeError as e:
             print(f"[{model_name}] JSON Parse Error: {str(e)}")
