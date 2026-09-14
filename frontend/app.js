@@ -195,9 +195,12 @@ function App() {
             updateGame(activeGameId, {
                 historyItems: [...activeGame.historyItems, {
                     san: result.san,
+                    from: result.from,
+                    to: result.to,
                     color: result.color === 'w' ? 'White' : 'Black',
                     model: "Human",
-                    reasoning: null
+                    reasoning: null,
+                    plan: null
                 }],
                 fenHistory: [...activeGame.fenHistory, activeChess.fen()]
             });
@@ -262,11 +265,49 @@ function App() {
                       const lastMove = g.historyItems[g.historyItems.length - 1]; // Opponent's last move
                       const planStep = g.plan[0]; // Currently considering just 1 step lookahead
                       
-                      if (lastMove && planStep && lastMove.san === planStep.if_opponent_plays) {
+                      const opPlays = planStep.if_opponent_plays;
+                      const iPlay = planStep.then_i_play;
+                      
+                      let expectedOpOrigin = null;
+                      let expectedOpDest = null;
+                      let expectedOpSan = null;
+                      
+                      if (typeof opPlays === 'string') {
+                          expectedOpSan = opPlays;
+                      } else if (opPlays && typeof opPlays === 'object') {
+                          expectedOpOrigin = opPlays.origin;
+                          expectedOpDest = opPlays.destination;
+                      }
+                      
+                      let myOrigin = null;
+                      let myDest = null;
+                      let myPromote = undefined;
+                      
+                      if (iPlay && typeof iPlay === 'object') {
+                          myOrigin = iPlay.origin;
+                          myDest = iPlay.destination;
+                          myPromote = iPlay.promotion || undefined;
+                      } else {
+                          myOrigin = planStep.then_i_play_origin;
+                          myDest = planStep.then_i_play_destination;
+                          myPromote = planStep.then_i_play_promotion || undefined;
+                      }
+                      
+                      let isMatch = false;
+                      if (lastMove) {
+                          if (expectedOpOrigin && expectedOpDest) {
+                              isMatch = (lastMove.from === expectedOpOrigin && lastMove.to === expectedOpDest);
+                          } else if (expectedOpSan) {
+                              isMatch = (lastMove.san === expectedOpSan);
+                          }
+                      }
+                      
+                      if (isMatch && myOrigin && myDest) {
+                          
                           const moveObj = {
-                              from: planStep.then_i_play_origin,
-                              to: planStep.then_i_play_destination,
-                              promotion: planStep.then_i_play_promotion || undefined
+                              from: myOrigin,
+                              to: myDest,
+                              promotion: myPromote
                           };
                           try {
                               const result = chess.move(moveObj);
@@ -275,9 +316,12 @@ function App() {
                                       ...g,
                                       historyItems: [...g.historyItems, {
                                           san: result.san,
+                                          from: result.from,
+                                          to: result.to,
                                           color: isWhiteTurn ? 'White' : 'Black',
                                           model: currentPlayer,
-                                          reasoning: "⚡ Pré-Move Condicional Executado! (O oponente fez exatamente o que eu esperava: " + lastMove.san + ")"
+                                          reasoning: "⚡ Pré-Move Condicional Executado! (O oponente fez exatamente o que eu esperava: " + lastMove.san + ")",
+                                          plan: null
                                       }],
                                       fenHistory: [...g.fenHistory, chess.fen()],
                                       plan: null // consume plan
@@ -328,9 +372,12 @@ function App() {
                                                   status: "Playing...",
                                                   historyItems: [...currG.historyItems, {
                                                       san: m.san,
+                                                      from: m.from,
+                                                      to: m.to,
                                                       color: isWhiteTurn ? 'White' : 'Black',
                                                       model: currentPlayer,
-                                                      reasoning: data.move.reasoning
+                                                      reasoning: data.move.reasoning,
+                                                      plan: data.move.plan
                                                   }],
                                                   fenHistory: [...currG.fenHistory, currChess.fen()],
                                                   plan: data.move.plan || null

@@ -129,7 +129,8 @@ def generate_move(model_name: str, board_json: dict, history: list, history_item
                 "type": "json_schema",
                 "json_schema": {
                     "name": "chess_candidates",
-                    "schema": ranking_schema
+                    "schema": ranking_schema,
+                    "strict": True
                 }
             },
             temperature=0.3
@@ -180,12 +181,25 @@ def generate_move(model_name: str, board_json: dict, history: list, history_item
                     "items": {
                         "type": "object",
                         "properties": {
-                            "if_opponent_plays": {"type": "string"},
-                            "then_i_play_origin": {"type": "string"},
-                            "then_i_play_destination": {"type": "string"},
-                            "then_i_play_promotion": {"type": ["string", "null"]}
+                            "if_opponent_plays": {
+                                "type": "object",
+                                "properties": {
+                                    "origin": {"type": "string"},
+                                    "destination": {"type": "string"}
+                                },
+                                "required": ["origin", "destination"]
+                            },
+                            "then_i_play": {
+                                "type": "object",
+                                "properties": {
+                                    "origin": {"type": "string"},
+                                    "destination": {"type": "string"},
+                                    "promotion": {"type": ["string", "null"]}
+                                },
+                                "required": ["origin", "destination"]
+                            }
                         },
-                        "required": ["if_opponent_plays", "then_i_play_origin", "then_i_play_destination", "then_i_play_promotion"],
+                        "required": ["if_opponent_plays", "then_i_play"],
                         "additionalProperties": False
                     }
                 }
@@ -201,7 +215,8 @@ def generate_move(model_name: str, board_json: dict, history: list, history_item
                 "type": "json_schema",
                 "json_schema": {
                     "name": "chess_move",
-                    "schema": inline_schema
+                    "schema": inline_schema,
+                    "strict": True
                 }
             },
             temperature=0.1
